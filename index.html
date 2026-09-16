@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Stickman Walk</title>
+  <title>Geometry Dash — Neon Run</title>
   <style>
     :root { color-scheme: dark; }
     * { box-sizing: border-box; }
@@ -12,168 +12,163 @@
       min-height: 100vh;
       display: grid;
       place-items: center;
-      background: #111827;
-      font-family: system-ui, sans-serif;
+      overflow: hidden;
+      background: #090b20;
+      color: #fff;
+      font-family: Inter, ui-sans-serif, system-ui, sans-serif;
     }
-    .game {
-      width: min(900px, 96vw);
-      text-align: center;
+    .game-shell { width: min(1000px, 96vw); text-align: center; }
+    h1 {
+      margin: 0 0 10px;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      font-size: clamp(1.2rem, 3vw, 2rem);
+      text-shadow: 0 0 16px #ff42da;
     }
-    h1 { margin: 0 0 12px; }
-    p { color: #cbd5e1; }
+    .hud {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      margin: 0 auto 10px;
+      max-width: 940px;
+      color: #bffaff;
+      font-weight: 800;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      font-size: .8rem;
+    }
+    .hud span { color: #fff; }
     canvas {
-      display: block;
       width: 100%;
       height: auto;
-      border: 3px solid #334155;
-      border-radius: 12px;
-      background: #bae6fd;
-      touch-action: none;
+      display: block;
+      border: 3px solid #26f7e8;
+      border-radius: 14px;
+      background: #11163f;
+      box-shadow: 0 0 30px rgba(38, 247, 232, .32), inset 0 0 40px rgba(255, 66, 218, .12);
+      touch-action: manipulation;
+      cursor: pointer;
     }
-    kbd {
-      padding: 2px 7px;
-      border: 1px solid #64748b;
-      border-radius: 5px;
-      background: #1e293b;
-    }
+    .help { margin: 12px 0 0; color: #9ca9dc; font-size: .9rem; }
+    kbd { padding: 2px 7px; border: 1px solid #5a67a8; border-radius: 5px; background: #171d4b; color: #fff; }
   </style>
 </head>
 <body>
-  <main class="game">
-    <h1>Stickman Walk</h1>
-    <canvas id="game" width="900" height="500" aria-label="A game where you can walk a stickman"></canvas>
-    <p>Move with <kbd>←</kbd> <kbd>→</kbd> or <kbd>A</kbd> <kbd>D</kbd>. Press <kbd>Space</kbd> to jump.</p>
+  <main class="game-shell">
+    <h1>Neon Dash</h1>
+    <div class="hud"><div>Score: <span id="score">0</span></div><div>Best: <span id="best">0</span></div><div>Speed: <span id="speed">1.0x</span></div></div>
+    <canvas id="game" width="960" height="540" aria-label="Geometry Dash style neon platform game"></canvas>
+    <p class="help"><kbd>Space</kbd> <kbd>↑</kbd> or tap to jump · Double tap after a crash to restart</p>
   </main>
-
   <script>
     const canvas = document.querySelector('#game');
     const ctx = canvas.getContext('2d');
-
+    const scoreEl = document.querySelector('#score');
+    const bestEl = document.querySelector('#best');
+    const speedEl = document.querySelector('#speed');
+    const W = canvas.width, H = canvas.height, ground = 438;
     const keys = new Set();
-    const player = {
-      x: canvas.width / 2,
-      y: 380,
-      width: 34,
-      height: 90,
-      speed: 260,
-      jumpPower: 520,
-      velocityY: 0,
-      grounded: true,
-      walkTime: 0
-    };
+    let best = Number(localStorage.getItem('neon-dash-best') || 0);
+    bestEl.textContent = best;
+    let state, last = performance.now(), jumpQueued = false, touchTime = 0;
 
-    const groundY = 430;
-    let previousTime = performance.now();
+    function reset() {
+      state = { running: true, dead: false, distance: 0, score: 0, speed: 305, spawn: 0.8, obstacles: [], particles: [], pulse: 0 };
+      player.x = 170; player.y = ground - 40; player.vy = 0; player.rotation = 0; player.grounded = true;
+    }
+    const player = { x: 170, y: ground - 40, size: 40, vy: 0, rotation: 0, grounded: true };
+    reset();
 
-    addEventListener('keydown', (event) => {
-      keys.add(event.key.toLowerCase());
-      if (['arrowleft', 'arrowright', 'a', 'd', ' '].includes(event.key.toLowerCase())) {
-        event.preventDefault();
+    function jump() {
+      if (state.dead) { reset(); return; }
+      if (player.grounded) {
+        player.vy = -650; player.grounded = false;
+        burst(player.x, player.y + player.size / 2, '#26f7e8', 8);
       }
-      if ((event.key === ' ' || event.key.toLowerCase() === 'w' || event.key === 'arrowup') && player.grounded) {
-        player.velocityY = -player.jumpPower;
-        player.grounded = false;
-      }
+    }
+    addEventListener('keydown', e => {
+      const key = e.key.toLowerCase(); keys.add(key);
+      if ([' ', 'arrowup', 'w'].includes(key)) { e.preventDefault(); if (!e.repeat) jumpQueued = true; }
+      if (key === 'r' && state.dead) reset();
+    });
+    addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
+    canvas.addEventListener('pointerdown', () => {
+      const now = performance.now();
+      if (state.dead && now - touchTime < 500) reset(); else jumpQueued = true;
+      touchTime = now;
     });
 
-    addEventListener('keyup', (event) => keys.delete(event.key.toLowerCase()));
-
-    function update(delta) {
-      const movingLeft = keys.has('arrowleft') || keys.has('a');
-      const movingRight = keys.has('arrowright') || keys.has('d');
-      const direction = Number(movingRight) - Number(movingLeft);
-
-      player.x += direction * player.speed * delta;
-      player.x = Math.max(player.width / 2, Math.min(canvas.width - player.width / 2, player.x));
-      player.walkTime += direction * delta * 10;
-
-      player.velocityY += 1200 * delta;
-      player.y += player.velocityY * delta;
-      if (player.y >= groundY - player.height) {
-        player.y = groundY - player.height;
-        player.velocityY = 0;
-        player.grounded = true;
+    function addObstacle() {
+      const type = Math.random() < .7 ? 'spike' : 'block';
+      const height = type === 'spike' ? 42 + Math.random() * 14 : 45 + Math.random() * 35;
+      state.obstacles.push({ x: W + 30, width: type === 'spike' ? 42 : 42 + Math.random() * 25, height, type });
+      if (Math.random() < .18) state.obstacles.push({ x: W + 98, width: 42, height: 45, type: 'spike' });
+      state.spawn = .55 + Math.random() * .8;
+    }
+    function burst(x, y, color, count) {
+      for (let i = 0; i < count; i++) state.particles.push({ x, y, vx: (Math.random() - .5) * 260, vy: (Math.random() - .8) * 260, life: .45 + Math.random() * .5, color, size: 3 + Math.random() * 5 });
+    }
+    function update(dt) {
+      if (jumpQueued) { jump(); jumpQueued = false; }
+      if (state.dead) { updateParticles(dt); return; }
+      state.distance += state.speed * dt;
+      state.score = Math.floor(state.distance / 10);
+      state.speed = Math.min(470, 305 + state.score * 1.3);
+      state.pulse = Math.max(0, state.pulse - dt * 2.5);
+      state.spawn -= dt;
+      if (state.spawn <= 0) addObstacle();
+      player.vy += 1750 * dt; player.y += player.vy * dt;
+      if (player.y >= ground - player.size) { player.y = ground - player.size; player.vy = 0; player.grounded = true; player.rotation = Math.round(player.rotation / (Math.PI / 2)) * Math.PI / 2; }
+      else { player.grounded = false; player.rotation += dt * 8; }
+      for (const o of state.obstacles) o.x -= state.speed * dt;
+      state.obstacles = state.obstacles.filter(o => o.x + o.width > -30);
+      for (const o of state.obstacles) {
+        const px = player.x - player.size / 2 + 7, py = player.y - player.size / 2 + 7, ps = player.size - 14;
+        const hit = px < o.x + o.width - 4 && px + ps > o.x + 4 && py + ps > ground - o.height + 5;
+        if (hit) crash();
       }
+      if (Math.random() < dt * 16) state.particles.push({ x: player.x - 18, y: player.y + 15, vx: -30, vy: 0, life: .35, color: '#ff42da', size: 3 });
+      updateParticles(dt);
+      scoreEl.textContent = state.score; speedEl.textContent = (state.speed / 305).toFixed(1) + 'x';
     }
-
+    function crash() {
+      if (state.dead) return;
+      state.dead = true; state.running = false; burst(player.x, player.y, '#ff42da', 35);
+      if (state.score > best) { best = state.score; localStorage.setItem('neon-dash-best', best); bestEl.textContent = best; }
+    }
+    function updateParticles(dt) {
+      for (const p of state.particles) { p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 500 * dt; p.life -= dt; }
+      state.particles = state.particles.filter(p => p.life > 0);
+    }
     function draw() {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-      // Sky and simple scenery.
-      ctx.fillStyle = '#bae6fd';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.fillStyle = '#86efac';
-      ctx.fillRect(0, groundY, canvas.width, canvas.height - groundY);
-      ctx.fillStyle = '#22c55e';
-      ctx.fillRect(0, groundY, canvas.width, 8);
-      ctx.fillStyle = '#fef08a';
-      ctx.beginPath();
-      ctx.arc(760, 90, 42, 0, Math.PI * 2);
-      ctx.fill();
-
-      // Shadow.
-      ctx.fillStyle = 'rgba(15, 23, 42, 0.2)';
-      ctx.beginPath();
-      ctx.ellipse(player.x, groundY + 2, 30, 7, 0, 0, Math.PI * 2);
-      ctx.fill();
-
-      drawStickman();
+      const hue = 230 + Math.sin(state.distance / 300) * 12;
+      const sky = ctx.createLinearGradient(0, 0, 0, H); sky.addColorStop(0, `hsl(${hue}, 55%, 17%)`); sky.addColorStop(1, '#090b20'); ctx.fillStyle = sky; ctx.fillRect(0, 0, W, H);
+      drawBackground();
+      ctx.fillStyle = '#171b45'; ctx.fillRect(0, ground, W, H - ground);
+      ctx.fillStyle = '#26f7e8'; ctx.fillRect(0, ground, W, 5);
+      ctx.globalAlpha = .13; ctx.fillStyle = '#26f7e8'; ctx.fillRect(0, ground + 5, W, 3); ctx.globalAlpha = 1;
+      state.obstacles.forEach(drawObstacle); drawPlayer(); state.particles.forEach(p => { ctx.globalAlpha = Math.max(0, p.life); ctx.fillStyle = p.color; ctx.fillRect(p.x, p.y, p.size, p.size); }); ctx.globalAlpha = 1;
+      if (state.dead) drawOverlay();
     }
-
-    function drawStickman() {
-      const x = player.x;
-      const top = player.y;
-      const walking = keys.has('arrowleft') || keys.has('arrowright') || keys.has('a') || keys.has('d');
-      const swing = walking && player.grounded ? Math.sin(player.walkTime) * 18 : 0;
-      const bob = walking && player.grounded ? Math.abs(Math.sin(player.walkTime)) * 2 : 0;
-      const headY = top + 16 - bob;
-      const shoulderY = top + 38 - bob;
-      const hipY = top + 66 - bob;
-
-      ctx.strokeStyle = '#111827';
-      ctx.fillStyle = '#f8fafc';
-      ctx.lineWidth = 7;
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-
-      // Head.
-      ctx.beginPath();
-      ctx.arc(x, headY, 16, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
-
-      // Body.
-      ctx.beginPath();
-      ctx.moveTo(x, shoulderY);
-      ctx.lineTo(x, hipY);
-      ctx.stroke();
-
-      // Arms swing opposite to the legs.
-      ctx.beginPath();
-      ctx.moveTo(x, shoulderY + 3);
-      ctx.lineTo(x - 25, shoulderY + 27 + swing);
-      ctx.moveTo(x, shoulderY + 3);
-      ctx.lineTo(x + 25, shoulderY + 27 - swing);
-      ctx.stroke();
-
-      // Legs swing while walking.
-      ctx.beginPath();
-      ctx.moveTo(x, hipY);
-      ctx.lineTo(x - 21 + swing, top + player.height);
-      ctx.moveTo(x, hipY);
-      ctx.lineTo(x + 21 - swing, top + player.height);
-      ctx.stroke();
+    function drawBackground() {
+      const offset = -(state.distance % 80); ctx.strokeStyle = 'rgba(74, 104, 190, .22)'; ctx.lineWidth = 1;
+      for (let x = offset; x < W; x += 80) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, ground); ctx.stroke(); }
+      for (let y = 58; y < ground; y += 58) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+      ctx.fillStyle = 'rgba(255,66,218,.18)'; ctx.beginPath(); ctx.arc(790, 110, 54 + state.pulse * 25, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#ff42da'; ctx.beginPath(); ctx.arc(790, 110, 22, 0, Math.PI * 2); ctx.fill();
     }
-
-    function gameLoop(time) {
-      const delta = Math.min((time - previousTime) / 1000, 0.05);
-      previousTime = time;
-      update(delta);
-      draw();
-      requestAnimationFrame(gameLoop);
+    function drawObstacle(o) {
+      ctx.save(); ctx.shadowBlur = 16; ctx.shadowColor = '#ff42da'; ctx.fillStyle = '#ff42da'; ctx.strokeStyle = '#ffd1f4'; ctx.lineWidth = 2;
+      if (o.type === 'spike') { ctx.beginPath(); ctx.moveTo(o.x, ground); ctx.lineTo(o.x + o.width / 2, ground - o.height); ctx.lineTo(o.x + o.width, ground); ctx.closePath(); ctx.fill(); ctx.stroke(); }
+      else { ctx.fillRect(o.x, ground - o.height, o.width, o.height); ctx.strokeRect(o.x, ground - o.height, o.width, o.height); ctx.strokeStyle = '#26f7e8'; ctx.beginPath(); ctx.moveTo(o.x, ground - o.height); ctx.lineTo(o.x + o.width, ground); ctx.stroke(); }
+      ctx.restore();
     }
-
-    requestAnimationFrame(gameLoop);
+    function drawPlayer() {
+      ctx.save(); ctx.translate(player.x, player.y); ctx.rotate(player.rotation); ctx.shadowBlur = 20; ctx.shadowColor = '#26f7e8'; ctx.fillStyle = state.dead ? '#ff42da' : '#26f7e8'; ctx.fillRect(-20, -20, 40, 40); ctx.strokeStyle = '#eaffff'; ctx.lineWidth = 3; ctx.strokeRect(-20, -20, 40, 40); ctx.fillStyle = '#11163f'; ctx.fillRect(-11, -8, 7, 7); ctx.fillRect(4, -8, 7, 7); ctx.fillRect(-10, 7, 20, 4); ctx.restore();
+    }
+    function drawOverlay() { ctx.fillStyle = 'rgba(7, 8, 25, .72)'; ctx.fillRect(0, 0, W, H); ctx.textAlign = 'center'; ctx.fillStyle = '#fff'; ctx.font = '900 52px system-ui'; ctx.fillText('CRASHED!', W / 2, 220); ctx.font = '700 22px system-ui'; ctx.fillStyle = '#26f7e8'; ctx.fillText(`SCORE  ${state.score}`, W / 2, 270); ctx.fillStyle = '#cbd5ff'; ctx.font = '16px system-ui'; ctx.fillText('Tap twice, press R, or jump to try again', W / 2, 315); }
+    function loop(now) { const dt = Math.min((now - last) / 1000, .035); last = now; update(dt); draw(); requestAnimationFrame(loop); }
+    requestAnimationFrame(loop);
   </script>
 </body>
 </html>
